@@ -95,8 +95,8 @@ router.post('/tokens/book', (req: AuthRequest, res: Response) => {
         return;
       }
 
-      if (counter.status === 'CLOSED' || counter.status === 'MAINTENANCE') {
-        bookingError = 'Counter is currently not accepting new tokens';
+      if (counter.status !== 'OPEN') {
+        bookingError = `Counter is currently ${counter.status.toLowerCase()} and not accepting new tokens`;
         return;
       }
 
