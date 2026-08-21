@@ -68,6 +68,18 @@ export class SocketService {
     if (!this.io) return;
     this.io.emit('COUNTER_STATUS_CHANGED', { counterId, status });
   }
+
+  /**
+   * Emit TOKEN_CANCELLED event so the student UI can immediately reflect cancellation (#6)
+   */
+  public emitTokenCancelled(serviceId: string, counterId: string, tokenId: string): void {
+    if (!this.io) return;
+    const payload = { tokenId, counterId, serviceId };
+    // Broadcast globally and to the service room
+    this.io.emit('TOKEN_CANCELLED', payload);
+    this.io.to(`service:${serviceId}`).emit('TOKEN_CANCELLED', payload);
+    this.io.to(`counter:${counterId}`).emit('TOKEN_CANCELLED', payload);
+  }
 }
 
 export const socketService = new SocketService();

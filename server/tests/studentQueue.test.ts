@@ -225,9 +225,8 @@ describe('Student Experience & Token Management Integration Tests', () => {
     });
   });
 
-  describe('6. Token History', () => {
-    it('should return past tokens for student', async () => {
-      // Login as Neha (has completed token in seed)
+  describe('6. Token History - Pagination & Filtering (#3)', () => {
+    it('should return past tokens with pagination metadata for student', async () => {
       const nehaRes = await request(app)
         .post('/api/auth/login')
         .send({ email: 'neha@queuecraft.edu', password: 'password123' });
@@ -242,6 +241,70 @@ describe('Student Experience & Token Management Integration Tests', () => {
       expect(res.body.tokens.length).toBeGreaterThan(0);
       expect(res.body.tokens[0].token_number).toBe('LP-039');
       expect(res.body.tokens[0].status).toBe('COMPLETED');
+      // Pagination metadata must be present
+      expect(res.body.pagination).toBeDefined();
+      expect(res.body.pagination.page).toBe(1);
+      expect(res.body.pagination.total).toBeGreaterThan(0);
+    });
+
+    it('should support page and limit query params', async () => {
+      const nehaRes = await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'neha@queuecraft.edu', password: 'password123' });
+      const nehaToken = nehaRes.body.token;
+
+      const res = await request(app)
+        .get('/api/student/tokens/history?page=1&limit=1')
+        .set('Authorization', `Bearer ${nehaToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.tokens.length).toBeLessThanOrEqual(1);
+      expect(res.body.pagination.limit).toBe(1);
+      expect(res.body.pagination.page).toBe(1);
+    });
+
+    it('should filter history by status=COMPLETED', async () => {
+      const nehaRes = await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'neha@queuecraft.edu', password: 'password123' });
+      const nehaToken = nehaRes.body.token;
+
+      const res = await request(app)
+        .get('/api/student/tokens/history?status=COMPLETED')
+        .set('Authorization', `Bearer ${nehaToken}`);
+
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.tokens)).toBe(true);
+      res.body.tokens.forEach((t: any) => {
+        expect(t.status).toBe('COMPLETED');
+      });
+    });
+
+    it('should filter history by service_id', async () => {
+      const nehaRes = await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'neha@queuecraft.edu', password: 'password123' });
+      const nehaToken = nehaRes.body.token;
+
+      const res = await request(app)
+        .get('/api/student/tokens/history?service_id=srv-lp')
+        .set('Authorization', `Bearer ${nehaToken}`);
+
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.tokens)).toBe(true);
+      res.body.tokens.forEach((t: any) => {
+        expect(t.service_id).toBe('srv-lp');
+      });
+    });
+
+    it('should return empty tokens array when no history matches filter', async () => {
+      const res = await request(app)
+        .get('/api/student/tokens/history?status=CANCELLED')
+        .set('Authorization', `Bearer ${studentToken}`);
+
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.tokens)).toBe(true);
+      expect(res.body.pagination.total).toBe(0);
     });
   });
 });

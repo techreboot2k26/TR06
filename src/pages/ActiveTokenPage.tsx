@@ -43,21 +43,45 @@ export const ActiveTokenPage: React.FC = () => {
     fetchActiveToken();
   }, [tokenId]);
 
-  // Socket listener for real-time queue updates
+  // Socket listener for real-time queue updates (#6)
   useEffect(() => {
     if (!socket || !token?.counter_id) return;
 
+    // Re-fetch queue position when anyone's token changes in this counter
     const handleQueueUpdate = (data: { counterId: string }) => {
       if (data.counterId === token.counter_id) {
-        fetchActiveToken(); // Re-fetch to update position
+        fetchActiveToken();
       }
     };
 
-    socket.on('queueUpdate', handleQueueUpdate);
-    return () => {
-      socket.off('queueUpdate', handleQueueUpdate);
+    // When this student's token is called to the counter
+    const handleTokenCalled = (data: { counterId: string; token?: { id: string } }) => {
+      const calledTokenId = data.token?.id || (data as any).id;
+      if (calledTokenId === token.id || data.counterId === token.counter_id) {
+        fetchActiveToken();
+      }
     };
-  }, [socket, token?.counter_id]);
+
+    // When a token is cancelled — if it's THIS student's token, navigate away
+    const handleTokenCancelled = (data: { tokenId: string; counterId: string }) => {
+      if (data.tokenId === token.id) {
+        navigate('/student/history');
+      } else if (data.counterId === token.counter_id) {
+        // Someone else cancelled — update queue position
+        fetchActiveToken();
+      }
+    };
+
+    // Use correct server event names (QUEUE_UPDATED not queueUpdate)
+    socket.on('QUEUE_UPDATED', handleQueueUpdate);
+    socket.on('TOKEN_CALLED', handleTokenCalled);
+    socket.on('TOKEN_CANCELLED', handleTokenCancelled);
+    return () => {
+      socket.off('QUEUE_UPDATED', handleQueueUpdate);
+      socket.off('TOKEN_CALLED', handleTokenCalled);
+      socket.off('TOKEN_CANCELLED', handleTokenCancelled);
+    };
+  }, [socket, token?.id, token?.counter_id]);
 
   const handleCancel = async () => {
     if (!window.confirm('Are you sure you want to cancel your queue position?')) return;

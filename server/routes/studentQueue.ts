@@ -198,22 +198,79 @@ router.get('/tokens/active', (req: AuthRequest, res: Response) => {
 /**
  * 4. GET /api/student/tokens/history
  * Get the student's past tokens (COMPLETED, CANCELLED, SKIPPED)
+ * Supports pagination via ?page=1&limit=10 and filtering via ?status=COMPLETED&service_id=srv-lp
  */
 router.get('/tokens/history', (req: AuthRequest, res: Response) => {
   const user = req.user!;
 
   try {
     const db = getDb();
+
+    // Pagination params (default: page 1, limit 10)
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '10'), 10) || 10));
+    const offset = (page - 1) * limit;
+
+    // Filter params
+    const { status, service_id } = req.query;
+
+    // Allowed terminal statuses
+    const TERMINAL_STATUSES = ['COMPLETED', 'CANCELLED', 'SKIPPED'];
+    const filterStatus = typeof status === 'string' && TERMINAL_STATUSES.includes(status.toUpperCase())
+      ? status.toUpperCase()
+      : null;
+    const filterServiceId = typeof service_id === 'string' && service_id.trim() ? service_id.trim() : null;
+
+    // Build dynamic WHERE clause
+    const conditions: string[] = [`t.student_id = ?`];
+    const params: (string | number)[] = [user.id];
+
+    if (filterStatus) {
+      conditions.push(`t.status = ?`);
+      params.push(filterStatus);
+    } else {
+      conditions.push(`t.status IN ('COMPLETED', 'CANCELLED', 'SKIPPED')`);
+    }
+
+    if (filterServiceId) {
+      conditions.push(`t.service_id = ?`);
+      params.push(filterServiceId);
+    }
+
+    const whereClause = conditions.join(' AND ');
+
+    // Count total matching records for pagination metadata
+    const countResult = db.prepare(`
+      SELECT COUNT(*) as total
+      FROM tokens t
+      WHERE ${whereClause}
+    `).get(...params) as { total: number };
+
+    const total = countResult.total;
+    const totalPages = Math.ceil(total / limit);
+
+    // Fetch paginated records
     const tokens = db.prepare(`
       SELECT t.*, s.name as service_name, c.name as counter_name
       FROM tokens t
       JOIN services s ON t.service_id = s.id
-      JOIN counters c ON t.counter_id = c.id
-      WHERE t.student_id = ? AND t.status IN ('COMPLETED', 'CANCELLED', 'SKIPPED')
+      LEFT JOIN counters c ON t.counter_id = c.id
+      WHERE ${whereClause}
       ORDER BY t.created_at DESC
-    `).all(user.id);
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset);
 
-    res.json({ tokens });
+    res.json({
+      tokens,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      }
+    });
   } catch (err) {
     console.error('Error fetching token history:', err);
     res.status(500).json({ error: 'Failed to fetch token history' });
@@ -252,7 +309,10 @@ router.patch('/tokens/:tokenId/cancel', (req: AuthRequest, res: Response) => {
     `).run(tokenId);
 
     if (token.counter_id && token.service_id) {
-       socketService.emitQueueUpdated(token.service_id, { counterId: token.counter_id });
+      // Notify the queue updated (for staff dashboard refresh)
+      socketService.emitQueueUpdated(token.service_id, { counterId: token.counter_id });
+      // Notify the specific cancellation (fixes #6 — student UI can react immediately)
+      socketService.emitTokenCancelled(token.service_id, token.counter_id, tokenId);
     }
 
     res.json({ success: true, message: 'Token cancelled successfully' });
