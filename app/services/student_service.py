@@ -51,16 +51,16 @@ def book_token(
                 detail="Counter is currently not accepting new tokens"
             )
 
-        # 3. Check for any existing active token (global check matching Express Reference)
+        # 3. Check for any existing active token FOR THIS SPECIFIC SERVICE (fixes #1)
         cursor.execute("""
-            SELECT id FROM tokens 
-            WHERE student_id = ? AND status IN ('WAITING', 'SERVING', 'HELD');
-        """, (user_id,))
+            SELECT id, token_number FROM tokens 
+            WHERE student_id = ? AND service_id = ? AND status IN ('WAITING', 'SERVING', 'HELD');
+        """, (user_id, service_id))
         active_token = cursor.fetchone()
         if active_token:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="You already have an active token. Complete or cancel it first."
+                detail=f"You already have an active token ({active_token['token_number']}) for this service. Complete or cancel it first."
             )
 
         # 4. Generate unique sequential token number (e.g. LP-042)

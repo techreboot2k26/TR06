@@ -117,7 +117,7 @@ describe('Student Experience & Token Management Integration Tests', () => {
       expect(res.body.token.token_number).toMatch(/LP-/);
     });
 
-    it('should reject booking when student already has an active token', async () => {
+    it('should reject booking when student already has an active token for the same service', async () => {
       const res = await request(app)
         .post('/api/student/tokens/book')
         .set('Authorization', `Bearer ${studentWithActiveToken}`)
@@ -128,6 +128,42 @@ describe('Student Experience & Token Management Integration Tests', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/already have an active token/i);
+    });
+
+    it('should allow booking a DIFFERENT service when student has an active token in another service', async () => {
+      // aarav has LP-041 SERVING on srv-lp. Booking srv-cnt should succeed.
+      const res = await request(app)
+        .post('/api/student/tokens/book')
+        .set('Authorization', `Bearer ${studentWithActiveToken}`)
+        .send({
+          service_id: 'srv-cnt',
+          counter_id: 'cntr-cnt-1'
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.token).toBeDefined();
+      expect(res.body.token.service_id).toBe('srv-cnt');
+      expect(res.body.token.status).toBe('WAITING');
+    });
+
+    it('should allow booking after previous token for same service is COMPLETED', async () => {
+      // neha@queuecraft.edu has a COMPLETED token LP-039 on srv-lp (no active token)
+      const nehaRes = await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'neha@queuecraft.edu', password: 'password123' });
+      const nehaToken = nehaRes.body.token;
+
+      const res = await request(app)
+        .post('/api/student/tokens/book')
+        .set('Authorization', `Bearer ${nehaToken}`)
+        .send({
+          service_id: 'srv-lp',
+          counter_id: 'cntr-lp-2'
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.token).toBeDefined();
+      expect(res.body.token.status).toBe('WAITING');
     });
 
     it('should reject booking for a closed counter', async () => {

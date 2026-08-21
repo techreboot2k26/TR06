@@ -65,52 +65,69 @@ router.post('/tokens/book', (req: AuthRequest, res: Response) => {
   try {
     const db = getDb();
 
-    // Check if the student already has an active token
-    const activeToken = db.prepare(`
-      SELECT id FROM tokens 
-      WHERE student_id = ? AND status IN ('WAITING', 'SERVING', 'HELD')
-    `).get(user.id);
+    let bookingError: string | null = null;
+    let createdTokenId: string | null = null;
 
-    if (activeToken) {
-      res.status(400).json({ error: 'You already have an active token. Complete or cancel it first.' });
+    // Wrap check + insert in a transaction to prevent race conditions
+    const bookTransaction = db.transaction(() => {
+      // Check if the student already has an active token for THIS specific service (#1)
+      const activeToken = db.prepare(`
+        SELECT id, token_number FROM tokens 
+        WHERE student_id = ? AND service_id = ? AND status IN ('WAITING', 'SERVING', 'HELD')
+      `).get(user.id, service_id) as any;
+
+      if (activeToken) {
+        bookingError = `You already have an active token (${activeToken.token_number}) for this service. Complete or cancel it first.`;
+        return;
+      }
+
+      // Get service code
+      const service = db.prepare('SELECT code FROM services WHERE id = ?').get(service_id) as any;
+      if (!service) {
+        bookingError = 'Service not found';
+        return;
+      }
+
+      // Get counter and validate it belongs to the service
+      const counter = db.prepare('SELECT id, status FROM counters WHERE id = ? AND service_id = ?').get(counter_id, service_id) as any;
+      if (!counter) {
+        bookingError = 'Counter not found for this service';
+        return;
+      }
+
+      if (counter.status === 'CLOSED' || counter.status === 'MAINTENANCE') {
+        bookingError = 'Counter is currently not accepting new tokens';
+        return;
+      }
+
+      // Generate Token Number (e.g., LP-042)
+      const sequenceQuery = db.prepare(`
+        SELECT COUNT(*) as count 
+        FROM tokens 
+        WHERE service_id = ? AND date(created_at) = date('now')
+      `).get(service_id) as any;
+
+      const seqNum = (sequenceQuery.count + 1).toString().padStart(3, '0');
+      const tokenNumber = `${service.code}-${seqNum}`;
+      const tokenId = crypto.randomUUID();
+
+      db.prepare(`
+        INSERT INTO tokens (id, token_number, student_id, student_name, student_email, service_id, counter_id, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'WAITING')
+      `).run(tokenId, tokenNumber, user.id, user.name, user.email, service_id, counter_id);
+
+      createdTokenId = tokenId;
+    });
+
+    bookTransaction();
+
+    if (bookingError) {
+      const statusCode = bookingError.includes('already have an active token') ? 400
+        : bookingError.includes('not found') ? 404
+        : 400;
+      res.status(statusCode).json({ error: bookingError });
       return;
     }
-
-    // Get service code
-    const service = db.prepare('SELECT code FROM services WHERE id = ?').get(service_id) as any;
-    if (!service) {
-      res.status(404).json({ error: 'Service not found' });
-      return;
-    }
-
-    // Get counter
-    const counter = db.prepare('SELECT id, status FROM counters WHERE id = ?').get(counter_id) as any;
-    if (!counter) {
-      res.status(404).json({ error: 'Counter not found' });
-      return;
-    }
-    
-    if (counter.status === 'CLOSED' || counter.status === 'MAINTENANCE') {
-       res.status(400).json({ error: 'Counter is currently not accepting new tokens' });
-       return;
-    }
-
-    // Generate Token Number (e.g., LP-042)
-    const sequenceQuery = db.prepare(`
-      SELECT COUNT(*) as count 
-      FROM tokens 
-      WHERE service_id = ? AND date(created_at) = date('now')
-    `).get(service_id) as any;
-    
-    const seqNum = (sequenceQuery.count + 1).toString().padStart(3, '0');
-    const tokenNumber = `${service.code}-${seqNum}`;
-    const tokenId = crypto.randomUUID();
-
-    // Insert new token
-    db.prepare(`
-      INSERT INTO tokens (id, token_number, student_id, student_name, student_email, service_id, counter_id, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'WAITING')
-    `).run(tokenId, tokenNumber, user.id, user.name, user.email, service_id, counter_id);
 
     // Notify staff and other students
     socketService.emitQueueUpdated(service_id, { counterId: counter_id });
@@ -122,7 +139,7 @@ router.post('/tokens/book', (req: AuthRequest, res: Response) => {
       JOIN services s ON t.service_id = s.id
       JOIN counters c ON t.counter_id = c.id
       WHERE t.id = ?
-    `).get(tokenId);
+    `).get(createdTokenId);
 
     res.json({ token });
   } catch (err) {
