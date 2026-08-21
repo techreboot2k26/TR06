@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { AuthRequest, authenticateToken, requireRole } from '../middleware/auth.js';
 import { getDb } from '../db/database.js';
 import { socketService } from '../services/socketService.js';
+import { queueEngine } from '../services/queueEngine.js';
 import crypto from 'crypto';
 
 const router = Router();
@@ -54,12 +55,23 @@ router.get('/services', (req: AuthRequest, res: Response) => {
  * Book a new token for a specific service and counter
  */
 router.post('/tokens/book', (req: AuthRequest, res: Response) => {
-  const { service_id, counter_id } = req.body;
+  const { service_id } = req.body;
+  let { counter_id } = req.body;
   const user = req.user!;
 
-  if (!service_id || !counter_id) {
-    res.status(400).json({ error: 'Service ID and Counter ID are required' });
+  if (!service_id) {
+    res.status(400).json({ error: 'Service ID is required' });
     return;
+  }
+
+  // If counter_id not provided, automatically balance across available open counters (#8)
+  if (!counter_id) {
+    const optimal = queueEngine.getOptimalCounterForService(service_id);
+    if (!optimal) {
+      res.status(400).json({ error: 'No available open counters for this service' });
+      return;
+    }
+    counter_id = optimal.counterId;
   }
 
   try {

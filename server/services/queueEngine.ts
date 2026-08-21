@@ -55,6 +55,7 @@ export interface IQueueEngine {
   getTokenPositionDetails(tokenId: string): { position: number; peopleAhead: number; estimatedWaitMinutes: number } | null;
   getWaitingQueueWithDetails(serviceId: string): TokenDetails[];
   promoteNextToken(serviceId: string, counterId: string): QueueEngineResult;
+  getOptimalCounterForService(serviceId: string): { counterId: string; counterName: string; estimatedWaitMinutes: number; workloadScore: number } | null;
 }
 
 /**
@@ -648,6 +649,69 @@ export class DefaultQueueEngine implements IQueueEngine {
     `).get(counterId) as TokenRecord | undefined;
 
     return token || null;
+  }
+
+  /**
+   * Intelligent Multi-Counter Load Balancing (#8)
+   * Selects the optimal OPEN counter for a given service based on:
+   * 1. Active serving token remaining time
+   * 2. Number of waiting tokens assigned to the counter
+   * 3. Service duration metrics
+   */
+  getOptimalCounterForService(serviceId: string): { counterId: string; counterName: string; estimatedWaitMinutes: number; workloadScore: number } | null {
+    const db = getDb();
+    const openCounters = db.prepare(`
+      SELECT id, name FROM counters
+      WHERE service_id = ? AND status = 'OPEN'
+      ORDER BY name ASC
+    `).all(serviceId) as Array<{ id: string; name: string }>;
+
+    if (openCounters.length === 0) return null;
+
+    const avgServiceTime = this.getAverageServiceTime(serviceId);
+    const now = new Date().getTime();
+
+    const evaluated = openCounters.map(c => {
+      // 1. Waiting tokens assigned to this counter
+      const waitingCount = (db.prepare(`
+        SELECT COUNT(*) as count FROM tokens
+        WHERE counter_id = ? AND status = 'WAITING'
+      `).get(c.id) as any).count || 0;
+
+      // 2. Active serving token remaining time
+      const activeServing = db.prepare(`
+        SELECT started_at FROM tokens
+        WHERE counter_id = ? AND status = 'SERVING'
+        LIMIT 1
+      `).get(c.id) as { started_at: string | null } | undefined;
+
+      let remainingServingTime = 0;
+      if (activeServing && activeServing.started_at) {
+        const startedTime = new Date(activeServing.started_at).getTime();
+        const elapsedMins = Math.max(0, (now - startedTime) / (60 * 1000));
+        remainingServingTime = Math.max(0.5, avgServiceTime - elapsedMins);
+      }
+
+      const workloadScore = (waitingCount * avgServiceTime) + remainingServingTime;
+      const estimatedWaitMinutes = Math.round(workloadScore * 10) / 10;
+
+      return {
+        counterId: c.id,
+        counterName: c.name,
+        estimatedWaitMinutes,
+        workloadScore
+      };
+    });
+
+    // Sort by lowest workload score, then counter name for deterministic tie-breaking
+    evaluated.sort((a, b) => {
+      if (a.workloadScore !== b.workloadScore) {
+        return a.workloadScore - b.workloadScore;
+      }
+      return a.counterName.localeCompare(b.counterName);
+    });
+
+    return evaluated[0];
   }
 }
 
