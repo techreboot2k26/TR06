@@ -32,7 +32,11 @@ const ProtectedStaffRoute: React.FC<{ children: React.ReactNode }> = ({ children
     return <Navigate to="/login" replace />;
   }
 
-  if (user?.role !== 'STAFF' && user?.role !== 'ADMIN') {
+  if (user?.role === 'ADMIN') {
+    return <Navigate to="/admin" replace />;
+  }
+
+  if (user?.role !== 'STAFF') {
     return (
       <div style={{
         minHeight: '100vh',
@@ -75,6 +79,10 @@ const ProtectedAdminRoute: React.FC<{ children: React.ReactNode }> = ({ children
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
+  }
+
+  if (user?.role === 'STAFF') {
+    return <Navigate to="/staff" replace />;
   }
 
   if (user?.role !== 'ADMIN') {

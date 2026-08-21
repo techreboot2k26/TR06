@@ -14,7 +14,7 @@
     "test:integration": "node scripts/integrationSmoke.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.8.0",
+    "better-sqlite3": "^13.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

@@ -2,6 +2,7 @@ import { Router, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { getDb } from '../db/database.js';
 import { authenticateToken, requireRole, AuthRequest } from '../middleware/auth.js';
+import { socketService } from '../services/socketService.js';
 
 const router = Router();
 
@@ -137,7 +138,7 @@ router.post('/users', (req: AuthRequest, res: Response) => {
 // PATCH edit user
 router.patch('/users/:id', (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const { name, email, password, role } = req.body;
     const db = getDb();
 
@@ -192,7 +193,7 @@ router.patch('/users/:id', (req: AuthRequest, res: Response) => {
 // DELETE user
 router.delete('/users/:id', (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const db = getDb();
 
     // Verify user exists
@@ -255,6 +256,8 @@ router.post('/services', (req: AuthRequest, res: Response) => {
       VALUES (?, ?, ?, ?, ?)
     `).run(newId, name, cleanCode, description || '', now);
 
+    socketService.emitQueueUpdated(newId, { action: 'SERVICE_CREATED', serviceId: newId });
+
     res.status(210).json({
       id: newId,
       name,
@@ -270,7 +273,7 @@ router.post('/services', (req: AuthRequest, res: Response) => {
 // PATCH edit service
 router.patch('/services/:id', (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const { name, code, description } = req.body;
     const db = getDb();
 
@@ -299,6 +302,8 @@ router.patch('/services/:id', (req: AuthRequest, res: Response) => {
       WHERE id = ?
     `).run(updatedName, cleanCode, updatedDesc, id);
 
+    socketService.emitQueueUpdated(id, { action: 'SERVICE_UPDATED', serviceId: id });
+
     res.json({
       id,
       name: updatedName,
@@ -314,7 +319,7 @@ router.patch('/services/:id', (req: AuthRequest, res: Response) => {
 // DELETE service
 router.delete('/services/:id', (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const db = getDb();
 
     const service = db.prepare('SELECT id FROM services WHERE id = ?').get(id);
@@ -337,6 +342,8 @@ router.delete('/services/:id', (req: AuthRequest, res: Response) => {
     }
 
     db.prepare('DELETE FROM services WHERE id = ?').run(id);
+    socketService.emitQueueUpdated(id, { action: 'SERVICE_DELETED', serviceId: id });
+
     res.json({ success: true, message: 'Service deleted successfully' });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to delete service' });
@@ -388,6 +395,9 @@ router.post('/counters', (req: AuthRequest, res: Response) => {
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(newId, service_id, name, cleanStatus, null, now);
 
+    socketService.emitCounterStatusChanged(newId, cleanStatus);
+    socketService.emitQueueUpdated(service_id, { action: 'COUNTER_CREATED', counterId: newId });
+
     res.status(210).json({
       id: newId,
       name,
@@ -404,7 +414,7 @@ router.post('/counters', (req: AuthRequest, res: Response) => {
 // PATCH update counter
 router.patch('/counters/:id', (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const { name, service_id, status } = req.body;
     const db = getDb();
 
@@ -429,7 +439,7 @@ router.patch('/counters/:id', (req: AuthRequest, res: Response) => {
     }
 
     const updatedName = name !== undefined ? name : counter.name;
-    const updatedServiceId = service_id !== undefined ? service_id : counter.service_id;
+    const updatedServiceId = String(service_id !== undefined ? service_id : counter.service_id);
     const updatedStatus = status !== undefined ? status : counter.status;
 
     db.prepare(`
@@ -437,6 +447,9 @@ router.patch('/counters/:id', (req: AuthRequest, res: Response) => {
       SET name = ?, service_id = ?, status = ?
       WHERE id = ?
     `).run(updatedName, updatedServiceId, updatedStatus, id);
+
+    socketService.emitCounterStatusChanged(id, updatedStatus);
+    socketService.emitQueueUpdated(updatedServiceId, { action: 'COUNTER_STATUS', status: updatedStatus, counterId: id });
 
     res.json({
       id,
@@ -454,10 +467,10 @@ router.patch('/counters/:id', (req: AuthRequest, res: Response) => {
 // DELETE counter
 router.delete('/counters/:id', (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const db = getDb();
 
-    const counter = db.prepare('SELECT id FROM counters WHERE id = ?').get(id);
+    const counter = db.prepare('SELECT * FROM counters WHERE id = ?').get(id) as any;
     if (!counter) {
       res.status(404).json({ error: 'Counter not found' });
       return;
@@ -471,6 +484,8 @@ router.delete('/counters/:id', (req: AuthRequest, res: Response) => {
     }
 
     db.prepare('DELETE FROM counters WHERE id = ?').run(id);
+    socketService.emitQueueUpdated(String(counter.service_id), { action: 'COUNTER_DELETED', counterId: id });
+
     res.json({ success: true, message: 'Counter deleted successfully' });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to delete counter' });
@@ -480,7 +495,7 @@ router.delete('/counters/:id', (req: AuthRequest, res: Response) => {
 // PATCH /api/admin/counters/:id/assign-staff
 router.patch('/counters/:id/assign-staff', (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const { staffId } = req.body; // Can be string or null
     const db = getDb();
 
@@ -490,9 +505,11 @@ router.patch('/counters/:id/assign-staff', (req: AuthRequest, res: Response) => 
       return;
     }
 
-    if (staffId !== null) {
+    const targetStaffId = staffId && typeof staffId === 'string' && staffId.trim() !== '' ? staffId.trim() : null;
+
+    if (targetStaffId !== null) {
       // Validate staff exists and is indeed staff
-      const staffUser = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'STAFF'").get(staffId) as any;
+      const staffUser = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'STAFF'").get(targetStaffId) as any;
       if (!staffUser) {
         res.status(400).json({ error: 'User does not exist or does not possess the STAFF role' });
         return;
@@ -501,22 +518,32 @@ router.patch('/counters/:id/assign-staff', (req: AuthRequest, res: Response) => 
       // Enforce exclusivity: check if they are already assigned elsewhere
       const existingAssignment = db.prepare(`
         SELECT * FROM counters WHERE assigned_staff_id = ? AND id != ?
-      `).get(staffId, id) as any;
+      `).get(targetStaffId, id) as any;
 
       // Handle re-assignment: clear the other counter assignments if found
       if (existingAssignment) {
         db.prepare('UPDATE counters SET assigned_staff_id = NULL WHERE id = ?').run(existingAssignment.id);
+        socketService.emitQueueUpdated(existingAssignment.service_id, {
+          action: 'STAFF_UNASSIGNED',
+          counterId: existingAssignment.id
+        });
       }
     }
 
     // Run update transaction
-    db.prepare('UPDATE counters SET assigned_staff_id = ? WHERE id = ?').run(staffId || null, id);
+    db.prepare('UPDATE counters SET assigned_staff_id = ? WHERE id = ?').run(targetStaffId, id);
+
+    socketService.emitQueueUpdated(counter.service_id, {
+      action: targetStaffId ? 'STAFF_ASSIGNED' : 'STAFF_UNASSIGNED',
+      counterId: id,
+      assignedStaffId: targetStaffId
+    });
 
     res.json({
       success: true,
-      message: staffId ? 'Staff operator assigned successfully' : 'Staff operator unassigned successfully',
+      message: targetStaffId ? 'Staff operator assigned successfully' : 'Staff operator unassigned successfully',
       counter_id: id,
-      assigned_staff_id: staffId || null
+      assigned_staff_id: targetStaffId
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to assign staff' });

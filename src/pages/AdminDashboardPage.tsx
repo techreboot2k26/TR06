@@ -168,24 +168,37 @@ export const AdminDashboardPage: React.FC = () => {
         if (!socket) return;
 
         const handleQueueUpdate = () => {
-            // If we are on live monitor or overview, pull updates automatically
+            // Pull updates automatically based on active tab
             if (activeTab === 'live-monitor') {
                 loadLiveMonitor();
             } else if (activeTab === 'overview') {
                 loadDashboardStats();
+            } else if (activeTab === 'analytics') {
+                loadAnalytics();
+            } else if (activeTab === 'counters') {
+                loadCounters();
             }
         };
 
-        socket.on('token_called', handleQueueUpdate);
-        socket.on('token_completed', handleQueueUpdate);
-        socket.on('token_state_changed', handleQueueUpdate);
-        socket.on('counter_status_changed', handleQueueUpdate);
+        const events = [
+            'QUEUE_UPDATED',
+            'TOKEN_CALLED',
+            'TOKEN_COMPLETED',
+            'TOKEN_SKIPPED',
+            'TOKEN_HELD',
+            'TOKEN_RESUMED',
+            'COUNTER_STATUS_CHANGED',
+            'token_called',
+            'token_completed',
+            'token_state_changed',
+            'counter_status_changed',
+            'queue_updated'
+        ];
+
+        events.forEach((evt) => socket.on(evt, handleQueueUpdate));
 
         return () => {
-            socket.off('token_called', handleQueueUpdate);
-            socket.off('token_completed', handleQueueUpdate);
-            socket.off('token_state_changed', handleQueueUpdate);
-            socket.off('counter_status_changed', handleQueueUpdate);
+            events.forEach((evt) => socket.off(evt, handleQueueUpdate));
         };
     }, [socket, activeTab]);
 
@@ -1004,7 +1017,6 @@ export const AdminDashboardPage: React.FC = () => {
                             <div>
                                 <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Select Staff operator</label>
                                 <select
-                                    required
                                     value={assignStaffId}
                                     onChange={(e) => setAssignStaffId(e.target.value)}
                                     style={{ width: '100%', padding: '0.5rem 0.75rem', backgroundColor: 'var(--bg-dark)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', marginTop: '0.25rem', fontSize: '0.85rem' }}
