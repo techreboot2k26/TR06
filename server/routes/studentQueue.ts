@@ -100,14 +100,26 @@ router.post('/tokens/book', (req: AuthRequest, res: Response) => {
         return;
       }
 
-      // Generate Token Number (e.g., LP-042)
-      const sequenceQuery = db.prepare(`
-        SELECT COUNT(*) as count 
-        FROM tokens 
-        WHERE service_id = ? AND date(created_at) = date('now')
-      `).get(service_id) as any;
+      // Generate unique sequential Token Number (e.g., LP-042)
+      const maxToken = db.prepare(`
+        SELECT token_number FROM tokens
+        WHERE service_id = ? AND token_number LIKE ?
+        ORDER BY ROWID DESC
+        LIMIT 1
+      `).get(service_id, `${service.code}-%`) as { token_number: string } | undefined;
 
-      const seqNum = (sequenceQuery.count + 1).toString().padStart(3, '0');
+      let nextNum = 1;
+      if (maxToken) {
+        const parts = maxToken.token_number.split('-');
+        if (parts.length === 2) {
+          const num = parseInt(parts[1], 10);
+          if (!isNaN(num)) {
+            nextNum = num + 1;
+          }
+        }
+      }
+
+      const seqNum = String(nextNum).padStart(3, '0');
       const tokenNumber = `${service.code}-${seqNum}`;
       const tokenId = crypto.randomUUID();
 
